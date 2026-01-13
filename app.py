@@ -6,18 +6,12 @@ import pandas as pd
 import numpy as np
 import shap
 import plotly.express as px
-import matplotlib.pyplot as plt
-import seaborn as sns
-
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, roc_curve
-)
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
 from imblearn.over_sampling import SMOTE
 from xgboost import XGBClassifier
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
@@ -51,15 +45,24 @@ uploaded_file = st.sidebar.file_uploader("Upload CSV ou Excel", type=["csv", "xl
 # =========================
 @st.cache_data
 def carregar_dados(file):
-    if str(file).lower().endswith(".csv"):
+    if file is None:
+        return pd.DataFrame()
+    
+    # Detecta tipo do arquivo corretamente
+    if hasattr(file, "name"):
+        nome = file.name.lower()
+    else:
+        nome = str(file).lower()
+    
+    if nome.endswith(".csv"):
         return pd.read_csv(file)
-    elif str(file).lower().endswith(".xlsx"):
+    elif nome.endswith(".xlsx"):
         return pd.read_excel(file)
     else:
-        st.warning("Formato de arquivo inválido.")
+        st.warning("Formato de arquivo inválido. Envie CSV ou Excel.")
         return pd.DataFrame()
 
-# Caminho relativo do arquivo padrão
+# Caminho relativo para arquivo padrão no repositório
 arquivo_padrao = "intenção_de_compradores_online.csv"
 
 if uploaded_file:
@@ -145,11 +148,9 @@ if not df.empty:
             eval_metric="logloss",
             n_jobs=-1
         )
-
         log_reg.fit(X, y)
         rf.fit(X, y)
         xgb.fit(X, y)
-
         return log_reg, rf, xgb
 
     log_reg, rf, xgb = treinar_modelos(X_train_p, y_train)
