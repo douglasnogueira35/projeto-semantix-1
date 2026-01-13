@@ -1,10 +1,10 @@
 # =========================
 # IMPORTS
 # =========================
+import os
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
 import shap
 import plotly.express as px
 from io import BytesIO
@@ -42,8 +42,10 @@ st.sidebar.markdown("### 📂 Carregar CSV ou Excel")
 uploaded_file = st.sidebar.file_uploader("Upload CSV ou Excel", type=["csv", "xlsx"])
 
 # =========================
-# CARREGAMENTO DE DADOS
+# FUNÇÃO DE CARREGAMENTO
 # =========================
+arquivo_padrao = os.path.join(os.path.dirname(__file__), "online_shoppers_intention.csv")
+
 @st.cache_data
 def carregar_dados(file):
     if file is None:
@@ -57,15 +59,16 @@ def carregar_dados(file):
         st.error(f"Erro ao carregar arquivo: {e}")
         return None
 
-# Caminho relativo para arquivo padrão sem acentos
-arquivo_padrao = os.path.join(os.path.dirname(__file__), "intencao_de_compradores_online.csv")
-df = carregar_dados(uploaded_file) if uploaded_file else carregar_dados(arquivo_padrao)
-
-if df is None:
-    st.warning("Arquivo padrão não encontrado. Faça upload de um CSV ou Excel.")
-    st.stop()
+# Carregar dados
+if uploaded_file:
+    df = carregar_dados(uploaded_file)
+elif os.path.exists(arquivo_padrao):
+    df = carregar_dados(arquivo_padrao)
 else:
-    st.success("Arquivo carregado com sucesso!")
+    st.warning(f"Arquivo padrão '{arquivo_padrao}' não encontrado. Faça upload de um CSV ou Excel.")
+    st.stop()
+
+st.success("Arquivo carregado com sucesso!")
 
 # =========================
 # TRADUÇÃO DAS COLUNAS
@@ -97,7 +100,6 @@ df = df.rename(columns=traducao)
 # PREPARAÇÃO DOS DADOS
 # =========================
 target_col = "Compra"
-
 y = df[target_col].astype(int)
 X = df.drop(columns=[target_col])
 
