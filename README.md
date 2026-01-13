@@ -1,45 +1,32 @@
-# 🚀 Cliente Perfeito – Dashboard de Análise Preditiva
+# 🎯 Cliente Perfeito – Dashboard de Análise Preditiva
 
-![Banner](https://img.shields.io/badge/Projeto-Data%20Science-blue)
-
-## 📌 Descrição do Projeto
-
-O **Cliente Perfeito** é um **sistema de Machine Learning** que analisa o comportamento de navegação de usuários em e-commerce para identificar padrões associados à maior probabilidade de conversão (compra).  
-O projeto integra **modelos preditivos**, **visualizações interativas**, **explicabilidade de modelos (SHAP)** e **relatórios automáticos em TXT e PDF**, permitindo análises rápidas e decisões estratégicas.
+**Cliente Perfeito** é um sistema de **Machine Learning** desenvolvido para identificar padrões de navegação de usuários em e-commerce que indicam maior probabilidade de compra. Este dashboard interativo permite analisar métricas, gerar gráficos, relatórios e PDFs de forma automática e intuitiva.
 
 ---
 
-## 🛠 Tecnologias e Bibliotecas
+## 🛠 Funcionalidades
 
-- **Python 3.10+**
-- **Streamlit** – dashboard interativo
-- **Pandas / Numpy** – manipulação de dados
-- **Scikit-learn** – pré-processamento e modelagem
-- **XGBoost / RandomForest / LogisticRegression** – modelos preditivos
-- **Imbalanced-learn** – balanceamento de classes (SMOTE)
-- **Plotly / Matplotlib / Seaborn** – visualização de dados
-- **SHAP** – explicabilidade de modelos
-- **ReportLab** – geração de PDF
-- **Openpyxl** – leitura de arquivos Excel
-
----
-
-## ⚡ Funcionalidades
-
-- Carregamento de dados CSV ou Excel diretamente pelo dashboard.
-- Seleção da variável **TARGET** de forma interativa.
-- Pré-processamento automático de variáveis numéricas e categóricas.
-- **Balanceamento de classes** para problemas binários.
-- Treinamento de **Logistic Regression, Random Forest e XGBoost**.
-- Comparação de métricas: **Acurácia, Precisão, Recall, F1-score e ROC AUC**.
-- Curvas ROC interativas para problemas binários.
-- Feature importance para Random Forest e XGBoost.
-- Exibição de **coeficientes da regressão logística**.
-- Explicabilidade avançada via **SHAP**.
-- Relatórios automáticos em **TXT e PDF** com download direto.
-- Dashboard corporativo com interface intuitiva e profissional.
+- Upload de dados **CSV** ou **Excel** (até 200MB) diretamente pelo app.
+- Dataset padrão incluído: `intenção_de_compradores_online.csv`.
+- Pré-processamento automático:
+  - Normalização de colunas numéricas
+  - One-Hot Encoding de colunas categóricas
+- Treinamento de múltiplos modelos:
+  - **Regressão Logística**
+  - **Random Forest**
+  - **XGBoost**
+- Métricas de avaliação:
+  - Acurácia, Precisão, Recall, F1-score, ROC AUC
+- **Visualização interativa de gráficos**:
+  - Importância de variáveis (Random Forest)
+  - SHAP para explicabilidade do XGBoost
+- **Relatórios automáticos**:
+  - TXT exibido na tela e disponível para download
+  - PDF pronto para download
+- Balanceamento de classes opcional com **SMOTE**
+- Interface moderna e rápida, totalmente em português
 
 ---
 
-## 📁 Estrutura de Arquivos
+## 📂 Estrutura do Repositório
 
