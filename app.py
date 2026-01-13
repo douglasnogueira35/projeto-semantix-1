@@ -1,7 +1,10 @@
+# app.py - Cliente Perfeito
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
+import seaborn as sns
+import matplotlib.pyplot as plt
+import plotly.express as px
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -9,142 +12,151 @@ from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, roc_curve
-import shap
-import matplotlib.pyplot as plt
-import seaborn as sns
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, ConfusionMatrixDisplay
+from imblearn.over_sampling import SMOTE
+import unicodedata
 from io import BytesIO
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
+import base64
 
 st.set_page_config(page_title="🎯 Cliente Perfeito", layout="wide")
-st.title("🎯 Cliente Perfeito - Painel do Analista")
-st.write("Sistema de Machine Learning para identificar padrões de navegação com maior probabilidade de compra. Use os gráficos interativos, métricas e relatórios automáticos.")
 
-# --- Arquivo padrão ---
-arquivo_padrao = r"C:\Users\dougl\Downloads\projeto semantix 1\online_shoppers_intention.csv"
+# Função para normalizar nomes de arquivos
+def normalizar_nome_arquivo(file):
+    if hasattr(file, 'name'):
+        nome = file.name
+    else:
+        import os
+        nome = os.path.basename(file)
+    nome_base, extensao = os.path.splitext(nome)
+    nome_base = unicodedata.normalize('NFKD', nome_base).encode('ASCII', 'ignore').decode()
+    nome_base = nome_base.replace(' ', '_').lower()
+    return f"{nome_base}{extensao.lower()}"
 
-# --- Upload de arquivo ---
-uploaded_file = st.file_uploader("📂 Carregar CSV ou Excel", type=["csv", "xls", "xlsx"], help="Arraste e solte seu arquivo ou clique para selecionar (máx 200MB).")
-
+# Função para carregar CSV/Excel
 @st.cache_data
-def carregar_dados(file=None):
-    if file is None:
-        if os.path.exists(arquivo_padrao):
-            file = arquivo_padrao
-        else:
-            st.error("Nenhum arquivo carregado ou arquivo padrão não encontrado!")
-            return pd.DataFrame()
+def carregar_dados(file):
+    nome_normalizado = normalizar_nome_arquivo(file)
     try:
-        if str(file).lower().endswith(".csv"):
+        if nome_normalizado.endswith(".csv"):
             df = pd.read_csv(file)
-        elif str(file).lower().endswith((".xls", ".xlsx")):
-            df = pd.read_excel(file, engine="openpyxl")
+        elif nome_normalizado.endswith((".xls", ".xlsx")):
+            df = pd.read_excel(file, engine='openpyxl')
         else:
             st.error("Formato inválido! Use CSV ou Excel.")
-            return pd.DataFrame()
+            return None
+        st.success(f"Arquivo '{nome_normalizado}' carregado com sucesso!")
+        return df
     except Exception as e:
         st.error(f"Erro ao carregar arquivo: {e}")
-        return pd.DataFrame()
-    return df
+        return None
 
-df = carregar_dados(uploaded_file)
-if df.empty:
-    st.warning("Nenhum dado disponível. Faça upload de um arquivo válido.")
-    st.stop()
-else:
-    st.success(f"Arquivo carregado com sucesso! Linhas: {df.shape[0]}, Colunas: {df.shape[1]}")
+st.title("🎯 Cliente Perfeito - Painel do Analista")
+st.write("Sistema de Machine Learning para identificar padrões de navegação com maior probabilidade de compra.")
+
+# Upload de arquivo
+uploaded_file = st.file_uploader("📂 Carregar CSV ou Excel", type=["csv", "xls", "xlsx"])
+df = carregar_dados(uploaded_file) if uploaded_file else None
+
+if df is not None:
     st.dataframe(df.head())
-
-# --- Seleção da coluna target ---
-target_col = st.selectbox("Selecione a coluna target (Ex: Compra)", df.columns)
-X = df.drop(columns=[target_col])
-y = df[target_col]
-
-# --- Ajusta tipo do target para classificação ---
-if y.dtype == object:
-    y = pd.factorize(y)[0]
-
-# --- Seleção de colunas ---
-num_cols = X.select_dtypes(include=np.number).columns.tolist()
-cat_cols = X.select_dtypes(exclude=np.number).columns.tolist()
-
-# --- Pré-processamento ---
-preprocessor = ColumnTransformer(
-    transformers=[
+    colunas = df.columns.tolist()
+    
+    target_col = st.selectbox("Selecione a coluna target (Ex: Compra)", colunas)
+    
+    try:
+        X = df.drop(columns=[target_col])
+        y = df[target_col]
+        # Se target for string, codifica como número
+        if y.dtype == 'object':
+            y = pd.factorize(y)[0]
+    except Exception as e:
+        st.error(f"Erro ao definir X e y: {e}")
+        st.stop()
+    
+    # Pré-processamento
+    num_cols = X.select_dtypes(include=np.number).columns.tolist()
+    cat_cols = X.select_dtypes(exclude=np.number).columns.tolist()
+    
+    preprocessor = ColumnTransformer([
         ("num", StandardScaler(), num_cols),
         ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols)
-    ]
-)
-
-# --- Divisão treino/teste ---
-try:
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y
-    )
-except ValueError:
-    # se não houver estratificação possível
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-    st.warning("Estratificação não possível, dividindo sem stratify")
-
-# --- Modelos ---
-def treinar_modelos(X, y):
-    log_reg = Pipeline([("prep", preprocessor), ("lr", LogisticRegression(max_iter=500))])
-    rf = Pipeline([("prep", preprocessor), ("rf", RandomForestClassifier(n_estimators=200))])
-    xgb = Pipeline([("prep", preprocessor), ("xgb", XGBClassifier(use_label_encoder=False, eval_metric='logloss'))])
-
-    log_reg.fit(X, y)
-    rf.fit(X, y)
-    xgb.fit(X, y)
-    return log_reg, rf, xgb
-
-log_reg, rf, xgb = treinar_modelos(X_train, y_train)
-
-# --- Métricas ---
-def calcular_metricas(modelo, X, y):
-    y_pred = modelo.predict(X)
-    return {
-        "Acurácia": accuracy_score(y, y_pred),
-        "Precisão": precision_score(y, y_pred, average="weighted"),
-        "Recall": recall_score(y, y_pred, average="weighted"),
-        "F1-score": f1_score(y, y_pred, average="weighted")
+    ])
+    
+    # Split train/test
+    test_size = st.slider("📏 Proporção do conjunto de teste", 0.1, 0.5, 0.2)
+    random_state = st.number_input("🔁 Random State", value=42)
+    
+    try:
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=y if len(np.unique(y))>1 else None)
+    except Exception as e:
+        st.warning("Estratificação não possível, dividindo sem stratify")
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state)
+    
+    # SMOTE opcional
+    smote = SMOTE(random_state=random_state)
+    if st.checkbox("Aplicar SMOTE para balanceamento de classes"):
+        X_train, y_train = smote.fit_resample(X_train, y_train)
+    
+    # Treinamento de modelos
+    modelos = {
+        "Regressão Logística": LogisticRegression(max_iter=1000),
+        "Random Forest": RandomForestClassifier(),
+        "XGBoost": XGBClassifier(use_label_encoder=False, eval_metric='logloss')
     }
-
-st.subheader("📊 Métricas - Conjunto de Teste")
-metricas_log = calcular_metricas(log_reg, X_test, y_test)
-metricas_rf = calcular_metricas(rf, X_test, y_test)
-metricas_xgb = calcular_metricas(xgb, X_test, y_test)
-
-st.write("**Regressão Logística**", metricas_log)
-st.write("**Random Forest**", metricas_rf)
-st.write("**XGBoost**", metricas_xgb)
-
-# --- SHAP explicativo para XGBoost ---
-explainer = shap.Explainer(xgb.named_steps["xgb"], preprocessor.fit_transform(X_train))
-shap_values = explainer(preprocessor.transform(X_test))
-
-st.subheader("🔍 Explicação SHAP - XGBoost")
-fig, ax = plt.subplots(figsize=(10, 6))
-shap.summary_plot(shap_values, features=preprocessor.transform(X_test), feature_names=np.array(preprocessor.get_feature_names_out()), show=False)
-st.pyplot(fig)
-
-# --- Download de relatório ---
-st.subheader("📄 Relatório Executivo")
-relatorio_texto = f"""
-Relatório do Cliente Perfeito
-Número de linhas: {df.shape[0]}
-Número de colunas: {df.shape[1]}
-Modelos treinados: Regressão Logística, Random Forest, XGBoost
-Métricas XGBoost: {metricas_xgb}
-"""
-st.text_area("📋 Relatório TXT", relatorio_texto, height=200)
-
-# Download PDF
-buffer = BytesIO()
-doc = SimpleDocTemplate(buffer)
-styles = getSampleStyleSheet()
-story = [Paragraph(relatorio_texto, styles["Normal"])]
-doc.build(story)
-st.download_button("⬇️ Baixar Relatório PDF", data=buffer.getvalue(), file_name="relatorio_cliente_perfeito.pdf")
+    
+    resultados = {}
+    for nome, model in modelos.items():
+        pipeline = Pipeline([("preprocessor", preprocessor), ("model", model)])
+        pipeline.fit(X_train, y_train)
+        y_pred = pipeline.predict(X_test)
+        resultados[nome] = {
+            "Acurácia": accuracy_score(y_test, y_pred),
+            "Precisão": precision_score(y_test, y_pred, average='weighted'),
+            "Recall": recall_score(y_test, y_pred, average='weighted'),
+            "F1-score": f1_score(y_test, y_pred, average='weighted')
+        }
+    
+    # Exibir métricas
+    st.subheader("📊 Métricas de Avaliação")
+    for nome, metricas in resultados.items():
+        st.markdown(f"**{nome}**")
+        for met, val in metricas.items():
+            st.write(f"{met}: {val*100:.2f}%")
+    
+    # Confusion Matrix Random Forest
+    st.subheader("🧮 Matriz de Confusão - Random Forest")
+    model_rf = Pipeline([("preprocessor", preprocessor), ("model", RandomForestClassifier())])
+    model_rf.fit(X_train, y_train)
+    y_pred_rf = model_rf.predict(X_test)
+    cm = confusion_matrix(y_test, y_pred_rf)
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    fig, ax = plt.subplots()
+    disp.plot(ax=ax)
+    st.pyplot(fig)
+    
+    # Exportar relatório TXT
+    relatorio_txt = f"Relatório - Cliente Perfeito\n\nMétricas:\n"
+    for nome, metricas in resultados.items():
+        relatorio_txt += f"{nome}:\n"
+        for met, val in metricas.items():
+            relatorio_txt += f"  {met}: {val*100:.2f}%\n"
+        relatorio_txt += "\n"
+    
+    st.download_button("📥 Baixar relatório TXT", relatorio_txt, file_name="relatorio_cliente_perfeito.txt")
+    
+    # Exportar PDF
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
+    elements = [Paragraph("Relatório - Cliente Perfeito", styles['Title']), Spacer(1,12)]
+    for nome, metricas in resultados.items():
+        elements.append(Paragraph(nome, styles['Heading2']))
+        for met, val in metricas.items():
+            elements.append(Paragraph(f"{met}: {val*100:.2f}%", styles['Normal']))
+    doc.build(elements)
+    st.download_button("📥 Baixar relatório PDF", buffer.getvalue(), file_name="relatorio_cliente_perfeito.pdf")
+    
+else:
+    st.warning("Nenhum dado disponível. Faça upload de um arquivo válido.")
