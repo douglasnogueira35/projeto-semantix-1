@@ -1,14 +1,6 @@
-# ========================================================
-# APP STREAMLIT – CLIENTE PERFEITO
-# Sistema de ML para prever intenção de compra
-# ========================================================
-
 import streamlit as st
 import pandas as pd
 import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-import plotly.express as px
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
@@ -18,24 +10,30 @@ from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 from imblearn.over_sampling import SMOTE
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
+import shap
+import matplotlib.pyplot as plt
+import seaborn as sns
 from io import BytesIO
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
 
 st.set_page_config(page_title="Cliente Perfeito", layout="wide")
 
+st.title("🎯 Cliente Perfeito")
+st.markdown("Sistema de Machine Learning para identificar padrões de navegação associados à maior probabilidade de compra. Use os gráficos interativos, métricas e relatórios automáticos.")
+
 # =========================
-# FUNÇÃO PARA CARREGAR DADOS
+# FUNÇÃO SEGURA PARA CARREGAR CSV/EXCEL
 # =========================
 @st.cache_data
 def carregar_dados(file):
+    if file is None:
+        return pd.DataFrame()
     try:
-        if file is None:
-            st.warning("Nenhum arquivo carregado. Faça upload de um CSV ou Excel.")
-            return pd.DataFrame()
-        if str(file).lower().endswith(".csv"):
+        nome_arquivo = file.name.lower()
+        if nome_arquivo.endswith(".csv"):
             df = pd.read_csv(file)
-        elif str(file).lower().endswith((".xls", ".xlsx")):
+        elif nome_arquivo.endswith((".xls", ".xlsx")):
             df = pd.read_excel(file)
         else:
             st.error("Formato inválido! Use CSV ou Excel.")
@@ -46,160 +44,144 @@ def carregar_dados(file):
         return pd.DataFrame()
 
 # =========================
-# TÍTULO E INSTRUÇÕES
-# =========================
-st.title("🎯 Cliente Perfeito")
-st.write("""
-Sistema de Machine Learning para identificar padrões de navegação associados à maior probabilidade de compra.
-Use os gráficos interativos, métricas e relatórios automáticos.
-""")
-
-# =========================
-# UPLOAD DE ARQUIVO
+# UPLOAD DO ARQUIVO
 # =========================
 uploaded_file = st.file_uploader("📂 Carregar CSV ou Excel", type=['csv', 'xls', 'xlsx'], help="Tamanho máximo 200MB")
 df = carregar_dados(uploaded_file)
 
 if df.empty:
-    st.stop()  # Para o app se não houver dados
+    st.warning("Nenhum arquivo carregado ou arquivo inválido. Faça upload de um CSV ou Excel.")
+    st.stop()
 
-st.success("Arquivo carregado com sucesso!")
-st.dataframe(df.head())
+st.success(f"Arquivo carregado com sucesso! ({df.shape[0]} linhas x {df.shape[1]} colunas)")
 
 # =========================
-# SELEÇÃO DE COLUNA TARGET
+# SELEÇÃO DA COLUNA TARGET
 # =========================
 target_col = st.selectbox("Selecione a coluna target (Ex: Compra)", df.columns)
 
 # =========================
-# VARIÁVEIS E PREPROCESSAMENTO
+# SEPARAÇÃO DE VARIÁVEIS
 # =========================
 X = df.drop(columns=[target_col])
 y = df[target_col]
 
-# Detectar colunas categóricas e numéricas
-cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
-num_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
-
-preprocessor = ColumnTransformer([
-    ("num", StandardScaler(), num_cols),
-    ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols)
-])
+# Se target não for numérico, tentar codificar
+if y.dtype == "object":
+    y = pd.factorize(y)[0]
 
 # =========================
-# DIVISÃO TREINO/TESTE
+# OPÇÃO DE BALANCEAMENTO
 # =========================
-test_size = st.slider("📏 Proporção do conjunto de teste", min_value=0.1, max_value=0.5, value=0.3)
-random_state = st.number_input("🔁 Random State", min_value=0, value=42)
+balancear = st.checkbox("Aplicar SMOTE (balanceamento de classes)")
 
-# Transformar em arrays
-try:
-    X_p = preprocessor.fit_transform(X)
-except Exception as e:
-    st.error(f"Erro no preprocessamento: {e}")
-    st.stop()
+# =========================
+# SEPARAR CONJUNTO DE TREINO/TESTE
+# =========================
+test_size = st.slider("Proporção do conjunto de teste", min_value=0.1, max_value=0.5, value=0.3)
+random_state = st.number_input("Random State", min_value=0, value=42)
 
-# Checar se target é numérico para stratify
-if y.nunique() < 2:
-    stratify = None
-    st.warning("Estratificação não possível, dividindo sem stratify")
-else:
+if len(np.unique(y)) > 1:
     stratify = y
+else:
+    stratify = None
+    st.warning("Estratificação não possível (apenas uma classe presente).")
 
 X_train, X_test, y_train, y_test = train_test_split(
-    X_p, y, test_size=test_size, random_state=random_state, stratify=stratify
+    X, y, test_size=test_size, random_state=random_state, stratify=stratify
 )
 
 # =========================
-# BALANCEAMENTO SEGURO
+# DETECTAR COLUNAS NUMÉRICAS E CATEGÓRICAS
 # =========================
-usar_smote = st.checkbox("Aplicar SMOTE para balanceamento de classes")
-if usar_smote:
-    try:
-        min_count = y_train.value_counts().min()
-        if min_count <= 1:
-            st.warning(f"SMOTE não será aplicado: classe minoritária com {min_count} amostra(s)")
-        else:
-            smote = SMOTE(random_state=random_state)
-            X_train, y_train = smote.fit_resample(X_train, y_train)
-            st.success("SMOTE aplicado com sucesso!")
-    except Exception as e:
-        st.warning(f"SMOTE não pôde ser aplicado: {e}")
+num_cols = X.select_dtypes(include=np.number).columns.tolist()
+cat_cols = X.select_dtypes(exclude=np.number).columns.tolist()
 
 # =========================
-# TREINAMENTO DE MODELOS
+# PIPELINE
 # =========================
-st.subheader("🏋️‍♂️ Treinamento de Modelos")
+preprocessor = ColumnTransformer([
+    ("num", StandardScaler(), num_cols),
+    ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols)
+])
 
-log_reg = LogisticRegression(max_iter=1000)
-rf = RandomForestClassifier()
-xgb = XGBClassifier(use_label_encoder=False, eval_metric="logloss")
+# =========================
+# MODELAGEM
+# =========================
+log_reg = Pipeline([("pre", preprocessor), ("clf", LogisticRegression(max_iter=1000))])
+rf = Pipeline([("pre", preprocessor), ("clf", RandomForestClassifier(n_estimators=100))])
+xgb = Pipeline([("pre", preprocessor), ("clf", XGBClassifier(use_label_encoder=False, eval_metric='mlogloss'))])
 
 modelos = {"Regressão Logística": log_reg, "Random Forest": rf, "XGBoost": xgb}
 
-resultados = {}
-
-for nome, model in modelos.items():
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    try:
-        auc = roc_auc_score(y_test, model.predict_proba(X_test)[:,1])
-    except:
-        auc = np.nan
-    resultados[nome] = {
+# =========================
+# TREINAR MODELOS
+# =========================
+metricas = {}
+for nome, modelo in modelos.items():
+    modelo.fit(X_train, y_train)
+    y_pred = modelo.predict(X_test)
+    metricas[nome] = {
         "Acurácia": accuracy_score(y_test, y_pred),
-        "Precisão": precision_score(y_test, y_pred, average='weighted', zero_division=0),
-        "Recall": recall_score(y_test, y_pred, average='weighted', zero_division=0),
-        "F1-score": f1_score(y_test, y_pred, average='weighted', zero_division=0),
-        "ROC AUC": auc
+        "Precisão": precision_score(y_test, y_pred, average='macro', zero_division=0),
+        "Recall": recall_score(y_test, y_pred, average='macro', zero_division=0),
+        "F1": f1_score(y_test, y_pred, average='macro', zero_division=0),
     }
 
 # =========================
-# EXIBIR RESULTADOS
+# BALANCEAMENTO
+# =========================
+if balancear:
+    smote = SMOTE(random_state=random_state)
+    X_train, y_train = smote.fit_resample(X_train, y_train)
+
+# =========================
+# EXIBIR MÉTRICAS
 # =========================
 st.subheader("📊 Métricas dos Modelos")
-for nome, metricas in resultados.items():
+for nome, met in metricas.items():
     st.markdown(f"### {nome}")
-    st.write(metricas)
+    st.write(pd.DataFrame([met]))
 
 # =========================
-# GRÁFICOS INTERATIVOS
+# EXIBIR IMPORTÂNCIA DE VARIÁVEIS COM SHAP (XGBoost)
 # =========================
-st.subheader("📈 Gráficos Interativos")
-# Exemplo: Importância de variáveis no RandomForest
-importances = rf.feature_importances_
-try:
-    feature_names = preprocessor.get_feature_names_out()
-except:
-    feature_names = num_cols + cat_cols
-df_importance = pd.DataFrame({"Feature": feature_names, "Importance": importances})
-fig = px.bar(df_importance.sort_values("Importance", ascending=False), x="Feature", y="Importance",
-             title="Importância de Variáveis - Random Forest")
-st.plotly_chart(fig)
+st.subheader("🧠 Explicabilidade do Modelo (XGBoost)")
+
+explainer = shap.TreeExplainer(xgb.named_steps['clf'])
+X_test_transformed = preprocessor.transform(X_test)
+shap_values = explainer.shap_values(X_test_transformed)
+
+shap.summary_plot(shap_values, X_test_transformed, feature_names=preprocessor.get_feature_names_out(), show=False)
+st.pyplot(bbox_inches='tight')
+plt.clf()
 
 # =========================
-# RELATÓRIO AUTOMÁTICO
+# GERAR RELATÓRIO TXT E PDF
 # =========================
-st.subheader("📄 Relatório Executivo")
-relatorio_texto = "Relatório gerado automaticamente:\n\n"
-for nome, metricas in resultados.items():
-    relatorio_texto += f"{nome}:\n"
-    for met, val in metricas.items():
-        relatorio_texto += f"  {met}: {val:.3f}\n"
-    relatorio_texto += "\n"
+def gerar_relatorio(metricas):
+    texto = "Relatório de Métricas\n\n"
+    for nome, met in metricas.items():
+        texto += f"{nome}:\n"
+        for k, v in met.items():
+            texto += f"  {k}: {v:.4f}\n"
+        texto += "\n"
+    return texto
 
-st.text_area("📝 Relatório na Tela", relatorio_texto, height=250)
+relatorio_txt = gerar_relatorio(metricas)
+st.subheader("📄 Relatório Final")
+st.text_area("Relatório", relatorio_txt, height=300)
+
+# Botão para download TXT
+st.download_button("📥 Baixar Relatório TXT", relatorio_txt.encode("utf-8"), "relatorio.txt")
 
 # Gerar PDF
 pdf_buffer = BytesIO()
-doc = SimpleDocTemplate(pdf_buffer)
-styles = getSampleStyleSheet()
-story = [Paragraph("Relatório Executivo - Cliente Perfeito", styles['Title']), Spacer(1,12)]
-for nome, metricas in resultados.items():
-    story.append(Paragraph(nome, styles['Heading2']))
-    for met, val in metricas.items():
-        story.append(Paragraph(f"{met}: {val:.3f}", styles['Normal']))
-    story.append(Spacer(1,12))
-doc.build(story)
-pdf_buffer.seek(0)
-st.download_button("⬇️ Baixar PDF", data=pdf_buffer, file_name="relatorio_cliente_perfeito.pdf", mime="application/pdf")
+c = canvas.Canvas(pdf_buffer, pagesize=letter)
+c.drawString(50, 750, "Relatório de Métricas")
+y_pos = 720
+for linha in relatorio_txt.split("\n"):
+    c.drawString(50, y_pos, linha)
+    y_pos -= 15
+c.save()
+st.download_button("📥 Baixar Relatório PDF", pdf_buffer.getvalue(), "relatorio.pdf")
