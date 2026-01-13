@@ -57,8 +57,8 @@ def carregar_dados(file):
         st.error(f"Erro ao carregar arquivo: {e}")
         return None
 
-# Caminho relativo para arquivo padrão
-arquivo_padrao = os.path.join(os.path.dirname(__file__), "intenção_de_compradores_online.csv")
+# Caminho relativo para arquivo padrão sem acentos
+arquivo_padrao = os.path.join(os.path.dirname(__file__), "intencao_de_compradores_online.csv")
 df = carregar_dados(uploaded_file) if uploaded_file else carregar_dados(arquivo_padrao)
 
 if df is None:
@@ -96,7 +96,7 @@ df = df.rename(columns=traducao)
 # =========================
 # PREPARAÇÃO DOS DADOS
 # =========================
-target_col = "Compra"  # coluna target padrão
+target_col = "Compra"
 
 y = df[target_col].astype(int)
 X = df.drop(columns=[target_col])
@@ -151,7 +151,6 @@ log_reg, rf, xgb = treinar_modelos(X_train_p, y_train, random_state)
 # MÉTRICAS
 # =========================
 y_pred = xgb.predict(X_test_p)
-
 acc = accuracy_score(y_test, y_pred)
 prec = precision_score(y_test, y_pred)
 rec = recall_score(y_test, y_pred)
@@ -168,7 +167,6 @@ associados à maior probabilidade de compra. Use os gráficos interativos e rela
 """
 )
 
-# Métricas principais
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Acurácia", f"{acc:.2%}")
 col2.metric("Precisão", f"{prec:.2%}")
