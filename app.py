@@ -5,23 +5,21 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import matplotlib.pyplot as plt
-import seaborn as sns
 import shap
 from io import BytesIO
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
-from sklearn.model_selection import train_test_split, RandomizedSearchCV, cross_val_score, StratifiedKFold
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.feature_selection import SelectKBest, f_classif
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, roc_curve, auc
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, roc_curve
 from imblearn.over_sampling import SMOTE
 from xgboost import XGBClassifier
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
 
 # =========================
 # CONFIGURAÇÃO DA PÁGINA
@@ -42,25 +40,31 @@ test_size = st.sidebar.slider("📏 Proporção do conjunto de teste", 0.1, 0.4,
 random_state = st.sidebar.number_input("🔁 Random State", value=42, step=1)
 usar_smote = st.sidebar.checkbox("⚖️ Balancear classes (SMOTE)", True)
 
-st.sidebar.markdown("### 📂 Carregar Dados")
-uploaded_file = st.sidebar.file_uploader("Upload CSV ou Excel", type=["csv","xlsx"])
-arquivo_padrao = r"C:\Users\dougl\Downloads\projeto semantix 1\online_shoppers_intention.csv"
+st.sidebar.markdown("### 📂 Carregar CSV ou Excel")
+uploaded_file = st.sidebar.file_uploader("Upload CSV ou Excel", type=["csv", "xlsx"])
+arquivo_padrao = "online_shoppers_intention.csv"  # deve estar no mesmo diretório do app.py
 
 # =========================
 # FUNÇÃO DE CARREGAMENTO
 # =========================
 @st.cache_data
 def carregar_dados(file):
-    if hasattr(file, 'name'):
-        nome = file.name.lower()
-    else:
-        nome = str(file).lower()
-    if nome.endswith(".csv"):
-        return pd.read_csv(file)
-    elif nome.endswith(".xlsx"):
-        return pd.read_excel(file)
-    else:
+    try:
+        if hasattr(file, "name"):
+            nome = file.name.lower()
+            if nome.endswith(".csv"):
+                return pd.read_csv(file)
+            elif nome.endswith(".xlsx"):
+                return pd.read_excel(file)
+        elif isinstance(file, str):
+            if file.lower().endswith(".csv"):
+                return pd.read_csv(file)
+            elif file.lower().endswith(".xlsx"):
+                return pd.read_excel(file)
         st.error("Formato inválido. Use CSV ou Excel.")
+        return None
+    except FileNotFoundError:
+        st.error(f"Arquivo '{file}' não encontrado. Faça upload de um CSV ou Excel.")
         return None
 
 df = carregar_dados(uploaded_file) if uploaded_file else carregar_dados(arquivo_padrao)
@@ -107,17 +111,18 @@ num_cols = X.select_dtypes(include=np.number).columns.tolist()
 cat_cols = X.select_dtypes(exclude=np.number).columns.tolist()
 
 # =========================
-# PREPROCESSAMENTO
+# PREPROCESSAMENTO + FEATURE SELECTION
 # =========================
 preprocessor = ColumnTransformer([
     ("num", StandardScaler(), num_cols),
     ("cat", OneHotEncoder(handle_unknown="ignore"), cat_cols)
 ])
+selector = SelectKBest(score_func=f_classif, k="all")  # mantém todas
 
-# =========================
-# FEATURE SELECTION AUTOMÁTICA
-# =========================
-selector = SelectKBest(score_func=f_classif, k="all")  # Mantém todas, mas pode ajustar k
+pipeline = Pipeline([
+    ("preprocessor", preprocessor),
+    ("selector", selector)
+])
 
 # =========================
 # SPLIT
@@ -125,14 +130,6 @@ selector = SelectKBest(score_func=f_classif, k="all")  # Mantém todas, mas pode
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=test_size, random_state=random_state, stratify=y
 )
-
-# =========================
-# PIPELINE COM PREPROCESSAMENTO
-# =========================
-pipeline = Pipeline([
-    ("preprocessor", preprocessor),
-    ("selector", selector)
-])
 
 X_train_sel = pipeline.fit_transform(X_train, y_train)
 X_test_sel = pipeline.transform(X_test)
@@ -142,24 +139,27 @@ if usar_smote:
     X_train_sel, y_train = smote.fit_resample(X_train_sel, y_train)
 
 # =========================
-# TREINAMENTO DE MODELOS COM TUNING
+# TREINAMENTO
 # =========================
 @st.cache_resource
 def treinar_modelos(X, y):
-    # Random Forest com tuning rápido
-    rf_param = {"n_estimators":[100,300], "max_depth":[5,10,None]}
-    rf = RandomizedSearchCV(RandomForestClassifier(random_state=random_state), rf_param, n_iter=3, cv=3)
-    
-    xgb_param = {"max_depth":[3,5], "learning_rate":[0.05,0.1], "n_estimators":[100,300]}
-    xgb = RandomizedSearchCV(XGBClassifier(use_label_encoder=False, eval_metric="logloss", random_state=random_state), xgb_param, n_iter=3, cv=3)
-    
     log_reg = LogisticRegression(max_iter=1000)
-    
+    rf = RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=random_state)
+    xgb = XGBClassifier(
+        n_estimators=300,
+        learning_rate=0.05,
+        max_depth=5,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=random_state,
+        eval_metric="logloss",
+        use_label_encoder=False,
+        n_jobs=-1
+    )
     log_reg.fit(X, y)
     rf.fit(X, y)
     xgb.fit(X, y)
-    
-    return log_reg, rf.best_estimator_, xgb.best_estimator_
+    return log_reg, rf, xgb
 
 log_reg, rf, xgb = treinar_modelos(X_train_sel, y_train)
 
@@ -167,7 +167,6 @@ log_reg, rf, xgb = treinar_modelos(X_train_sel, y_train)
 # MÉTRICAS
 # =========================
 y_pred_xgb = xgb.predict(X_test_sel)
-
 acc = accuracy_score(y_test, y_pred_xgb)
 prec = precision_score(y_test, y_pred_xgb)
 rec = recall_score(y_test, y_pred_xgb)
@@ -186,7 +185,7 @@ with tabs[0]:
     st.title("🎯 Cliente Perfeito")
     st.markdown("""
 Sistema de **Machine Learning** para identificar padrões de navegação associados à maior probabilidade de compra.
-Use os gráficos interativos para análise e explore relatórios automáticos.
+Use os gráficos interativos e relatórios automáticos.
 """)
 
 # -------------------------
@@ -218,10 +217,10 @@ with tabs[2]:
     explainer = shap.TreeExplainer(xgb)
     shap_values = explainer.shap_values(X_test_sel[:300])
     
-    # Top 10 features
     feature_names = num_cols + list(pipeline.named_steps["preprocessor"].named_transformers_["cat"].get_feature_names_out(cat_cols))
     shap_importance = np.abs(shap_values).mean(axis=0)
     shap_df = pd.DataFrame({"Variável": feature_names, "Impacto Médio": shap_importance}).sort_values("Impacto Médio", ascending=False).head(10)
+    
     fig_shap = px.bar(shap_df, x="Impacto Médio", y="Variável", orientation="h", title="Top 10 Features - SHAP")
     fig_shap.update_layout(yaxis=dict(autorange="reversed"))
     st.plotly_chart(fig_shap, use_container_width=True)
@@ -245,7 +244,6 @@ Insights:
 - Variáveis relacionadas ao comportamento de navegação são decisivas.
 - Sistema confiável para apoio à tomada de decisão estratégica em e-commerce.
 """
-
     st.text_area("Relatório Automático", texto_relatorio, height=320)
     st.download_button("⬇️ Baixar relatório TXT", texto_relatorio, "relatorio_cliente_perfeito.txt")
 
