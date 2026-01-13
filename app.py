@@ -1,88 +1,85 @@
+# ========================================================
+# APP STREAMLIT – CLIENTE PERFEITO
+# Sistema de ML para prever intenção de compra
+# ========================================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+import plotly.express as px
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix
 from imblearn.over_sampling import SMOTE
-import plotly.express as px
-import plotly.figure_factory as ff
-import shap
-from reportlab.platypus import SimpleDocTemplate, Paragraph
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from io import BytesIO
 
-st.set_page_config(page_title="Cliente Perfeito", layout="wide", page_icon="👔")
-st.title("🎯 Cliente Perfeito")
-st.markdown("Sistema de Machine Learning para identificar padrões de navegação e prever conversão.\nUse gráficos, métricas e relatórios automáticos.")
+st.set_page_config(page_title="Cliente Perfeito", layout="wide")
 
 # =========================
-# SIDEBAR
+# FUNÇÃO PARA CARREGAR DADOS
 # =========================
-st.sidebar.header("Painel de Configurações")
-test_size = st.sidebar.slider("Proporção do conjunto de teste", 0.1, 0.4, 0.2, 0.05)
-random_state = st.sidebar.number_input("Random State", value=42, step=1)
-usar_smote = st.sidebar.checkbox("⚖️ Balancear classes (SMOTE)", value=True)
-
-# =========================
-# UPLOAD DE ARQUIVOS
-# =========================
-uploaded_file = st.sidebar.file_uploader("Upload CSV ou Excel", type=["csv", "xlsx"])
-
 @st.cache_data
 def carregar_dados(file):
     try:
-        if hasattr(file, "name"):
-            if file.name.endswith(".csv"):
-                return pd.read_csv(file)
-            elif file.name.endswith(".xlsx"):
-                return pd.read_excel(file)
+        if file is None:
+            st.warning("Nenhum arquivo carregado. Faça upload de um CSV ou Excel.")
+            return pd.DataFrame()
+        if str(file).lower().endswith(".csv"):
+            df = pd.read_csv(file)
+        elif str(file).lower().endswith((".xls", ".xlsx")):
+            df = pd.read_excel(file)
         else:
-            if str(file).endswith(".csv"):
-                return pd.read_csv(file)
-            elif str(file).endswith(".xlsx"):
-                return pd.read_excel(file)
-        st.error("Formato de arquivo inválido!")
-        st.stop()
+            st.error("Formato inválido! Use CSV ou Excel.")
+            return pd.DataFrame()
+        return df
     except Exception as e:
         st.error(f"Erro ao carregar arquivo: {e}")
-        st.stop()
-
-if uploaded_file:
-    df = carregar_dados(uploaded_file)
-    st.success("Arquivo carregado com sucesso!")
-else:
-    st.warning("Faça upload de um CSV ou Excel para continuar.")
-    st.stop()
+        return pd.DataFrame()
 
 # =========================
-# SELEÇÃO COLUNA TARGET
+# TÍTULO E INSTRUÇÕES
+# =========================
+st.title("🎯 Cliente Perfeito")
+st.write("""
+Sistema de Machine Learning para identificar padrões de navegação associados à maior probabilidade de compra.
+Use os gráficos interativos, métricas e relatórios automáticos.
+""")
+
+# =========================
+# UPLOAD DE ARQUIVO
+# =========================
+uploaded_file = st.file_uploader("📂 Carregar CSV ou Excel", type=['csv', 'xls', 'xlsx'], help="Tamanho máximo 200MB")
+df = carregar_dados(uploaded_file)
+
+if df.empty:
+    st.stop()  # Para o app se não houver dados
+
+st.success("Arquivo carregado com sucesso!")
+st.dataframe(df.head())
+
+# =========================
+# SELEÇÃO DE COLUNA TARGET
 # =========================
 target_col = st.selectbox("Selecione a coluna target (Ex: Compra)", df.columns)
 
-# Tentativa de conversão segura para numérico
-try:
-    y = pd.to_numeric(df[target_col], errors="coerce")
-    if y.isna().any():
-        st.warning("Coluna target possui valores não numéricos, convertendo NaN para 0")
-        y = y.fillna(0).astype(int)
-    else:
-        y = y.astype(int)
-except Exception as e:
-    st.error(f"Erro ao processar coluna target: {e}")
-    st.stop()
-
+# =========================
+# VARIÁVEIS E PREPROCESSAMENTO
+# =========================
 X = df.drop(columns=[target_col])
+y = df[target_col]
 
-# =========================
-# PREPROCESSAMENTO
-# =========================
-num_cols = X.select_dtypes(include=np.number).columns.tolist()
-cat_cols = X.select_dtypes(exclude=np.number).columns.tolist()
+# Detectar colunas categóricas e numéricas
+cat_cols = X.select_dtypes(include=['object', 'category']).columns.tolist()
+num_cols = X.select_dtypes(include=['int64', 'float64']).columns.tolist()
 
 preprocessor = ColumnTransformer([
     ("num", StandardScaler(), num_cols),
@@ -90,73 +87,119 @@ preprocessor = ColumnTransformer([
 ])
 
 # =========================
-# SPLIT COM SEGURANÇA
+# DIVISÃO TREINO/TESTE
 # =========================
-# Se stratify der erro (classe com única amostra), usamos split sem stratify
+test_size = st.slider("📏 Proporção do conjunto de teste", min_value=0.1, max_value=0.5, value=0.3)
+random_state = st.number_input("🔁 Random State", min_value=0, value=42)
+
+# Transformar em arrays
 try:
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=y
-    )
-except ValueError:
+    X_p = preprocessor.fit_transform(X)
+except Exception as e:
+    st.error(f"Erro no preprocessamento: {e}")
+    st.stop()
+
+# Checar se target é numérico para stratify
+if y.nunique() < 2:
+    stratify = None
     st.warning("Estratificação não possível, dividindo sem stratify")
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state
-    )
+else:
+    stratify = y
 
-X_train_p = preprocessor.fit_transform(X_train)
-X_test_p = preprocessor.transform(X_test)
+X_train, X_test, y_train, y_test = train_test_split(
+    X_p, y, test_size=test_size, random_state=random_state, stratify=stratify
+)
 
+# =========================
+# BALANCEAMENTO SEGURO
+# =========================
+usar_smote = st.checkbox("Aplicar SMOTE para balanceamento de classes")
 if usar_smote:
-    smote = SMOTE(random_state=random_state)
-    X_train_p, y_train = smote.fit_resample(X_train_p, y_train)
+    try:
+        min_count = y_train.value_counts().min()
+        if min_count <= 1:
+            st.warning(f"SMOTE não será aplicado: classe minoritária com {min_count} amostra(s)")
+        else:
+            smote = SMOTE(random_state=random_state)
+            X_train, y_train = smote.fit_resample(X_train, y_train)
+            st.success("SMOTE aplicado com sucesso!")
+    except Exception as e:
+        st.warning(f"SMOTE não pôde ser aplicado: {e}")
 
 # =========================
 # TREINAMENTO DE MODELOS
 # =========================
-@st.cache_resource
-def treinar_modelos(X, y, rs):
-    log_reg = LogisticRegression(max_iter=1000)
-    rf = RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=rs)
-    xgb = XGBClassifier(
-        n_estimators=300,
-        learning_rate=0.05,
-        max_depth=5,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        random_state=rs,
-        eval_metric="logloss",
-        n_jobs=-1
-    )
-    log_reg.fit(X, y)
-    rf.fit(X, y)
-    xgb.fit(X, y)
-    return log_reg, rf, xgb
+st.subheader("🏋️‍♂️ Treinamento de Modelos")
 
-log_reg, rf, xgb = treinar_modelos(X_train_p, y_train, random_state)
+log_reg = LogisticRegression(max_iter=1000)
+rf = RandomForestClassifier()
+xgb = XGBClassifier(use_label_encoder=False, eval_metric="logloss")
 
-# =========================
-# MÉTRICAS
-# =========================
-y_pred = xgb.predict(X_test_p)
-acc = accuracy_score(y_test, y_pred)
-prec = precision_score(y_test, y_pred, average="weighted", zero_division=0)
-rec = recall_score(y_test, y_pred, average="weighted", zero_division=0)
-f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+modelos = {"Regressão Logística": log_reg, "Random Forest": rf, "XGBoost": xgb}
+
+resultados = {}
+
+for nome, model in modelos.items():
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    try:
+        auc = roc_auc_score(y_test, model.predict_proba(X_test)[:,1])
+    except:
+        auc = np.nan
+    resultados[nome] = {
+        "Acurácia": accuracy_score(y_test, y_pred),
+        "Precisão": precision_score(y_test, y_pred, average='weighted', zero_division=0),
+        "Recall": recall_score(y_test, y_pred, average='weighted', zero_division=0),
+        "F1-score": f1_score(y_test, y_pred, average='weighted', zero_division=0),
+        "ROC AUC": auc
+    }
 
 # =========================
-# DASHBOARD
+# EXIBIR RESULTADOS
 # =========================
-st.subheader("Métricas de Desempenho")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Acurácia", f"{acc:.2%}")
-col2.metric("Precisão", f"{prec:.2%}")
-col3.metric("Recall", f"{rec:.2%}")
-col4.metric("F1-score", f"{f1:.2%}")
+st.subheader("📊 Métricas dos Modelos")
+for nome, metricas in resultados.items():
+    st.markdown(f"### {nome}")
+    st.write(metricas)
 
 # =========================
-# CONFUSION MATRIX
+# GRÁFICOS INTERATIVOS
 # =========================
-st.subheader("Matriz de Confusão")
-cm = confusion_matrix(y_test, y_pred)
-fig_cm = ff.create_annotated_heatmap(cm, x=list(set(y)), y=list(set(y)), colorscale="Blues", showscale=True)
-st.plotly_chart(fig_cm, use_container_width=True)
+st.subheader("📈 Gráficos Interativos")
+# Exemplo: Importância de variáveis no RandomForest
+importances = rf.feature_importances_
+try:
+    feature_names = preprocessor.get_feature_names_out()
+except:
+    feature_names = num_cols + cat_cols
+df_importance = pd.DataFrame({"Feature": feature_names, "Importance": importances})
+fig = px.bar(df_importance.sort_values("Importance", ascending=False), x="Feature", y="Importance",
+             title="Importância de Variáveis - Random Forest")
+st.plotly_chart(fig)
+
+# =========================
+# RELATÓRIO AUTOMÁTICO
+# =========================
+st.subheader("📄 Relatório Executivo")
+relatorio_texto = "Relatório gerado automaticamente:\n\n"
+for nome, metricas in resultados.items():
+    relatorio_texto += f"{nome}:\n"
+    for met, val in metricas.items():
+        relatorio_texto += f"  {met}: {val:.3f}\n"
+    relatorio_texto += "\n"
+
+st.text_area("📝 Relatório na Tela", relatorio_texto, height=250)
+
+# Gerar PDF
+pdf_buffer = BytesIO()
+doc = SimpleDocTemplate(pdf_buffer)
+styles = getSampleStyleSheet()
+story = [Paragraph("Relatório Executivo - Cliente Perfeito", styles['Title']), Spacer(1,12)]
+for nome, metricas in resultados.items():
+    story.append(Paragraph(nome, styles['Heading2']))
+    for met, val in metricas.items():
+        story.append(Paragraph(f"{met}: {val:.3f}", styles['Normal']))
+    story.append(Spacer(1,12))
+doc.build(story)
+pdf_buffer.seek(0)
+st.download_button("⬇️ Baixar PDF", data=pdf_buffer, file_name="relatorio_cliente_perfeito.pdf", mime="application/pdf")
