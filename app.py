@@ -6,15 +6,17 @@ import pandas as pd
 import numpy as np
 import shap
 import plotly.express as px
+import plotly.figure_factory as ff
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from xgboost import XGBClassifier
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import (accuracy_score, precision_score, recall_score,
+                             f1_score, confusion_matrix, roc_curve, auc)
 from imblearn.over_sampling import SMOTE
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph
 from reportlab.lib.styles import getSampleStyleSheet
 from io import BytesIO
 
@@ -30,8 +32,8 @@ st.set_page_config(
 st.title("🎯 Cliente Perfeito")
 st.markdown("""
 Sistema de **Machine Learning** para identificar padrões de navegação
-associados à maior probabilidade de compra.
-Use os gráficos interativos e relatórios automáticos.
+associados à maior probabilidade de compra.  
+Use os gráficos interativos, métricas e relatórios automáticos.
 """)
 
 # =========================
@@ -46,36 +48,33 @@ usar_smote = st.sidebar.checkbox("⚖️ Balancear classes (SMOTE)", True)
 st.sidebar.markdown("📂 Carregar CSV ou Excel")
 uploaded_file = st.sidebar.file_uploader("Upload CSV ou Excel", type=["csv", "xlsx"])
 
-# Arquivo padrão dentro do repositório
-import os
-arquivo_padrao = os.path.join("data", "online_shoppers_intention.csv")
-
 # =========================
 # CARREGAMENTO DE DADOS
 # =========================
 @st.cache_data
 def carregar_dados(file):
     try:
-        if file.name.endswith(".csv"):
-            return pd.read_csv(file)
-        elif file.name.endswith(".xlsx"):
-            return pd.read_excel(file)
-        else:
-            st.error("Formato de arquivo inválido! Use CSV ou Excel.")
-            st.stop()
+        if hasattr(file, "name"):
+            if file.name.endswith(".csv"):
+                return pd.read_csv(file)
+            elif file.name.endswith(".xlsx"):
+                return pd.read_excel(file)
+        else:  # caminho local
+            if str(file).endswith(".csv"):
+                return pd.read_csv(file)
+            elif str(file).endswith(".xlsx"):
+                return pd.read_excel(file)
+        st.error("Formato de arquivo inválido! Use CSV ou Excel.")
+        st.stop()
     except Exception as e:
         st.error(f"Erro ao carregar arquivo: {e}")
         st.stop()
 
-# Seleção do dataset
 if uploaded_file:
     df = carregar_dados(uploaded_file)
     st.success("Arquivo carregado com sucesso!")
-elif os.path.exists(arquivo_padrao):
-    df = pd.read_csv(arquivo_padrao)
-    st.info("Usando dataset padrão incluído no repositório.")
 else:
-    st.warning("Nenhum arquivo carregado ou arquivo padrão não encontrado!")
+    st.warning("Nenhum arquivo carregado! Faça upload de um CSV ou Excel.")
     st.stop()
 
 # =========================
@@ -85,11 +84,13 @@ target_col = st.selectbox(
     "Selecione a coluna target (Ex: Compra)",
     options=df.columns
 )
+
 try:
     y = df[target_col].astype(int)
 except:
     st.error("A coluna target deve ser numérica ou convertível para int.")
     st.stop()
+
 X = df.drop(columns=[target_col])
 
 # =========================
@@ -157,41 +158,39 @@ tabs = st.tabs(["📊 Visão Geral", "📈 Resultados", "🧠 Explicabilidade", 
 
 with tabs[0]:
     st.subheader("Visão Geral")
-    st.markdown("""
-    Painel interativo para explorar dados e analisar a probabilidade de conversão.
-    - Gráficos interativos
-    - Métricas de desempenho
-    - Relatórios automáticos
-    """)
+    st.dataframe(df.head())
 
 with tabs[1]:
-    st.subheader("Resultados")
+    st.subheader("Métricas de Desempenho")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Acurácia", f"{acc:.2%}")
     col2.metric("Precisão", f"{prec:.2%}")
     col3.metric("Recall", f"{rec:.2%}")
     col4.metric("F1-score", f"{f1:.2%}")
 
+    st.subheader("Confusion Matrix")
+    cm = confusion_matrix(y_test, y_pred)
+    fig_cm = ff.create_annotated_heatmap(cm, x=list(set(y)), y=list(set(y)),
+                                        colorscale="Blues", showscale=True)
+    st.plotly_chart(fig_cm, use_container_width=True)
+
 with tabs[2]:
     st.subheader("Explicabilidade")
     feature_names = (
         num_cols + list(preprocessor.named_transformers_["cat"].get_feature_names_out(cat_cols))
     )
-
-    # Importância Random Forest
-    imp_rf = pd.DataFrame({
-        "Variável": feature_names,
-        "Importância": rf.feature_importances_
-    }).sort_values("Importância", ascending=False).head(10)
+    # Random Forest
+    imp_rf = pd.DataFrame({"Variável": feature_names, "Importância": rf.feature_importances_}).sort_values("Importância", ascending=False).head(10)
     fig_rf = px.bar(imp_rf, x="Importância", y="Variável", orientation="h", title="Top 10 Variáveis — Random Forest")
     fig_rf.update_layout(yaxis=dict(autorange="reversed"))
     st.plotly_chart(fig_rf, use_container_width=True)
-
     # SHAP XGBoost
     explainer = shap.TreeExplainer(xgb)
     shap_values = explainer(X_test_p[:300])
-    shap_importance = np.abs(shap_values.values).mean(axis=0)
-    shap_df = pd.DataFrame({"Variável": feature_names, "Impacto Médio": shap_importance}).sort_values("Impacto Médio", ascending=False).head(10)
+    shap_df = pd.DataFrame({
+        "Variável": feature_names,
+        "Impacto Médio": np.abs(shap_values.values).mean(axis=0)
+    }).sort_values("Impacto Médio", ascending=False).head(10)
     fig_shap = px.bar(shap_df, x="Impacto Médio", y="Variável", orientation="h", title="Top 10 Variáveis — SHAP")
     fig_shap.update_layout(yaxis=dict(autorange="reversed"))
     st.plotly_chart(fig_shap, use_container_width=True)
@@ -201,7 +200,7 @@ with tabs[3]:
     texto = f"""
 RELATÓRIO EXECUTIVO – CLIENTE PERFEITO
 
-Modelo escolhido: XGBoost (melhor desempenho em classificação de conversão)
+Modelo escolhido: XGBoost (melhor desempenho)
 
 Métricas:
 - Acurácia: {acc:.2%}
@@ -216,7 +215,6 @@ Insights:
 """
     st.text_area("Relatório automático", texto, height=300)
 
-    # Download PDF
     def gerar_pdf(texto):
         buffer = BytesIO()
         doc = SimpleDocTemplate(buffer)
